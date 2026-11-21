@@ -51,6 +51,17 @@ The plan is in `scripts/monitors.py`: groups VPS, UniFi and Apps (12 monitors, 6
 
 Undo: `docker stop uptime-kuma`, copy the backup over `/opt/uptime-kuma/data/kuma.db` (delete `kuma.db-wal` and `kuma.db-shm`), `docker start uptime-kuma`, then `sudo rm /etc/cron.d/uptime-kuma-push /etc/uptime-kuma-push.env`.
 
+## Telegram alerts
+
+One notification, `Telegram (Hermes chat)`, sends every monitor's DOWN and UP to the owner's private chat through the
+same bot Hermes Agent uses. It is the default, so new monitors get it too.
+
+1. Put `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` (copy them from Hermes' `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USERS`). Never commit them.
+2. `python scripts/seed_telegram.py`: backs up `kuma.db` to `/opt/uptime-kuma/backups/kuma-pre-telegram-<stamp>.db`, stops only `uptime-kuma` for about a minute, inserts the notification and links it to every monitor.
+3. Tests: `pytest tests/test_07_telegram.py`.
+
+Hermes polls this bot, so nothing here may call `getUpdates`, set a webhook or log the bot out. Kuma only calls `sendMessage`.
+
 ## Operating notes
 
 - After changing the sidecar, recreate both services: `docker compose -p uptime-kuma --env-file /opt/uptime-kuma/.env -f /opt/uptime-kuma/docker/compose.yaml up -d --force-recreate`. Recreating only the sidecar leaves Kuma on a dead network.

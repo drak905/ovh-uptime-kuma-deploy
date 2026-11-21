@@ -222,6 +222,8 @@ def test_real_values_absent_from_tracked_files(env, vps):
         needles["host_ip"] = next(iter((st.get("Self") or {}).get("TailscaleIPs") or []), "")
     except Exception:
         pytest.skip("VPS not reachable, could only check the IP")
+    needles["telegram_token"] = env.get("TELEGRAM_BOT_TOKEN", "")
+    needles["telegram_chat_id"] = env.get("TELEGRAM_CHAT_ID", "")
     needles = {k: v for k, v in needles.items() if len(v) >= 4}
     assert needles.get("vps_ip"), "no VPS IP to check"
     hits = []
