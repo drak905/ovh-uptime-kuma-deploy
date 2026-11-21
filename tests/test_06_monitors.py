@@ -20,6 +20,7 @@ DB = f"{REMOTE}/data/kuma.db"
 FAKE_ENV = {
     "VPS_TS_IP": "10.0.0.1", "VPS_TS_FQDN": "host.example.ts.net",
     "KUMA_FQDN": "kuma.example.ts.net", "KUMA_TS_IP": "10.0.0.2",
+    "ARCANE_FQDN": "arcane.example.ts.net",
 }
 GROUPS = ["VPS", "UniFi", "Apps"]
 
@@ -41,10 +42,10 @@ def test_spec_groups_and_status_page(spec):
     assert spec["status_page"]["title"] == "VPS"
 
 
-def test_spec_has_twelve_unique_monitors(spec):
+def test_spec_has_fourteen_unique_monitors(spec):
     names = [m["name"] for m in _all(spec)]
-    assert len(names) == 12
-    assert len(set(names)) == 12
+    assert len(names) == 14
+    assert len(set(names)) == 14
     assert not set(names) & set(GROUPS), "leaf names must not collide with group names"
 
 
@@ -59,7 +60,7 @@ def test_spec_group_contents(spec):
     by = {g["name"]: [m["type"] for m in g["monitors"]] for g in spec["groups"]}
     assert sorted(by["VPS"]) == sorted(["ping", "port", "port", "http", "dns", "push", "push"])
     assert sorted(by["UniFi"]) == sorted(["http", "port", "push"])
-    assert sorted(by["Apps"]) == ["push", "push"]
+    assert sorted(by["Apps"]) == ["http", "push", "push", "push"]
 
 
 def test_spec_targets_come_from_env(spec):
@@ -81,7 +82,7 @@ def test_spec_requires_env_keys():
 
 def test_spec_push_keys_unique_and_in_script(spec):
     keys = [m["push_key"] for m in _all(spec) if m["type"] == "push"]
-    assert len(keys) == 5 and len(set(keys)) == 5
+    assert len(keys) == 6 and len(set(keys)) == 6
     script = (ROOT / "scripts" / "kuma_push.sh").read_text(encoding="utf-8")
     for k in keys:
         assert re.fullmatch(r"PUSH_[A-Z_]+", k), k
@@ -96,7 +97,7 @@ def test_spec_has_no_notifications_or_docker(spec):
 def test_push_cron_file():
     c = (ROOT / "scripts" / "uptime-kuma-push.cron").read_bytes().decode("utf-8")
     assert "\r" not in c and c.endswith("\n")
-    assert re.search(r"^\* \* \* \* \* root /opt/uptime-kuma/scripts/kuma_push\.sh\b", c, re.M)
+    assert re.search(r"^\* \* \* \* \* root flock -n \S+ /opt/uptime-kuma/scripts/kuma_push\.sh\b", c, re.M)
 
 
 def test_push_script_static():
@@ -139,7 +140,8 @@ def test_apply_is_idempotent_and_keeps_existing(tmp_path, spec):
         CREATE TABLE user (id INTEGER PRIMARY KEY, username TEXT);
         CREATE TABLE monitor (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active INT, user_id INT, type TEXT,
           interval INT, retry_interval INT, maxretries INT, hostname TEXT, port INT, url TEXT, timeout REAL,
-          dns_resolve_server TEXT, dns_resolve_type TEXT, expiry_notification INT, push_token TEXT, parent INT);
+          dns_resolve_server TEXT, dns_resolve_type TEXT, expiry_notification INT, push_token TEXT, parent INT,
+          accepted_statuscodes_json TEXT);
         CREATE TABLE status_page (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT UNIQUE, title TEXT, icon TEXT, theme TEXT,
           published INT, search_engine_index INT, show_tags INT, show_powered_by INT, show_certificate_expiry INT);
         CREATE TABLE "group" (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, public INT, active INT, weight INT, status_page_id INT);
@@ -150,14 +152,14 @@ def test_apply_is_idempotent_and_keeps_existing(tmp_path, spec):
     con.commit()
     con.close()
     first = kuma_apply.apply(str(p), spec)
-    assert len(first["created"]) == 3 + 12 + 1 and first["kept"] == []
-    assert len(first["push"]) == 5 and all(len(t) == 32 for t in first["push"].values())
+    assert len(first["created"]) == 3 + 14 + 1 and first["kept"] == []
+    assert len(first["push"]) == 6 and all(len(t) == 32 for t in first["push"].values())
     second = kuma_apply.apply(str(p), spec)
     assert second["created"] == [] and second["push"] == first["push"]
     con = sqlite3.connect(p)
-    assert con.execute("select count(*) from monitor").fetchone()[0] == 1 + 3 + 12
+    assert con.execute("select count(*) from monitor").fetchone()[0] == 1 + 3 + 14
     assert con.execute("select interval from monitor where name='Mine'").fetchone()[0] == 20
-    assert con.execute("select count(*) from monitor_group").fetchone()[0] == 12
+    assert con.execute("select count(*) from monitor_group").fetchone()[0] == 14
     assert con.execute("select count(distinct user_id) from monitor").fetchone()[0] == 1
     assert con.execute("select * from user").fetchall() == [(7, "owner")]
 
@@ -219,7 +221,7 @@ def test_db_group_monitors_and_children(vps, spec):
 def test_db_push_tokens_are_set_and_unique(vps):
     rows = sql(vps, "select push_token from monitor where type='push'")
     toks = [r["push_token"] for r in rows]
-    assert len(toks) == 5 and len(set(toks)) == 5
+    assert len(toks) == 6 and len(set(toks)) == 6
     assert all(t and len(t) == 32 for t in toks)
 
 
@@ -252,7 +254,7 @@ def test_push_conf_mode_600_and_dry_run_all_pass(vps):
     assert vps.run("sudo stat -c '%U:%G %a' /etc/uptime-kuma-push.env") == "root:root 600"
     out = vps.run(f"sudo KUMA_PUSH_DRYRUN=1 {REMOTE}/scripts/kuma_push.sh")
     lines = out.splitlines()
-    assert len(lines) == 5 and all(l.endswith(" pass") for l in lines), lines
+    assert len(lines) == 6 and all(l.endswith(" pass") for l in lines), lines
 
 
 def test_push_script_does_not_push_when_check_fails(vps):
@@ -260,7 +262,7 @@ def test_push_script_does_not_push_when_check_fails(vps):
     status = dict(l.rsplit(" ", 1) for l in out.splitlines())
     fails = [k for k, v in status.items() if v == "fail"]
     assert len(fails) == 2, status
-    assert sum(1 for v in status.values() if v == "pass") == 3
+    assert sum(1 for v in status.values() if v == "pass") == 4
 
 
 def test_containers_still_running(vps):
@@ -289,7 +291,7 @@ def test_status_page_all_monitors_up(vps, env):
             lists = hb["heartbeatList"]
             states = {i: (lists.get(str(i)) or [{}])[-1].get("status") for i in ids}
             last = f"{sum(1 for s in states.values() if s == 1)}/{len(ids)} up"
-            if len(ids) == 12 and all(s == 1 for s in states.values()):
+            if len(ids) == 14 and all(s == 1 for s in states.values()):
                 assert [g["name"] for g in page["publicGroupList"]] == GROUPS
                 return
         except Exception as e:  # not ready yet
@@ -305,5 +307,5 @@ def test_status_page_reachable_from_pc(env):
         pytest.skip("PC cannot reach the tailnet (Tailscale off or exit node)")
     assert r.status_code == 200
     data = r.json()["heartbeatList"]
-    assert len(data) == 12
+    assert len(data) == 14
     assert all((v or [{}])[-1].get("status") == 1 for v in data.values())

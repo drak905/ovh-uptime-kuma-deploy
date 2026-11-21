@@ -4,8 +4,11 @@
 usage: kuma_apply.py <kuma.db> <spec.json>      (the Kuma container must be stopped)
 
 Rules: insert only, matched by name. A monitor, group or status page that already exists is
-kept as it is. The `user` table is never touched. Prints one JSON line: created, kept and
-the push tokens by push_key. All inserts run in one transaction.
+kept as it is. The `user` table is never touched. Every monitor created by this run gets a link
+to each active default notification (what Kuma's own "default enabled" does); existing monitors
+get none. On a status page that already exists, monitors created by this run are added to the
+page's group of the same name (the group is made if it is missing). Prints one JSON line:
+created, kept and the push tokens by push_key. All inserts run in one transaction.
 """
 import json
 import secrets
@@ -37,6 +40,11 @@ def apply(db_path: str, spec: dict) -> dict:
         raise SystemExit("no Kuma user yet: create the admin account first")
     owner = owner["id"]
     out = {"created": [], "kept": [], "push": {}}
+    tables = {r["name"] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    notify = []
+    if {"notification", "monitor_notification"} <= tables:
+        notify = [r["id"] for r in cur.execute("SELECT id FROM notification WHERE is_default = 1 AND active = 1")]
+    new_ids = set()
 
     cur.execute("BEGIN IMMEDIATE")
     try:
@@ -50,6 +58,9 @@ def apply(db_path: str, spec: dict) -> dict:
                 raise SystemExit(f"monitor column(s) missing in this Kuma version: {sorted(unknown)}")
             fields = {"name": name, "user_id": owner, "active": 1, **fields}
             monitor_id = insert(cur, "monitor", fields)
+            for nid in notify:
+                insert(cur, "monitor_notification", {"monitor_id": monitor_id, "notification_id": nid})
+            new_ids.add(monitor_id)
             out["created"].append(name)
             return monitor_id, fields.get("push_token")
 
@@ -67,8 +78,22 @@ def apply(db_path: str, spec: dict) -> dict:
                     out["push"][m["push_key"]] = tok
 
         sp = spec["status_page"]
-        if cur.execute("SELECT 1 FROM status_page WHERE slug = ?", (sp["slug"],)).fetchone():
+        page = cur.execute("SELECT id FROM status_page WHERE slug = ?", (sp["slug"],)).fetchone()
+        if page:
             out["kept"].append("status page " + sp["slug"])
+            for gi, g in enumerate(spec["groups"], 1):
+                fresh = [m for m in g["monitors"] if ids[m["name"]] in new_ids]
+                if not fresh:
+                    continue
+                grp = cur.execute('SELECT id FROM "group" WHERE status_page_id = ? AND name = ?',
+                                  (page["id"], g["name"])).fetchone()
+                gid = grp["id"] if grp else insert(cur, "group", {
+                    "name": g["name"], "public": 1, "active": 1, "weight": gi, "status_page_id": page["id"]})
+                weight = cur.execute("SELECT COALESCE(MAX(weight), 0) FROM monitor_group WHERE group_id = ?",
+                                     (gid,)).fetchone()[0]
+                for m in fresh:
+                    weight += 1
+                    insert(cur, "monitor_group", {"monitor_id": ids[m["name"]], "group_id": gid, "weight": weight})
         else:
             page_id = insert(cur, "status_page", {
                 "slug": sp["slug"], "title": sp["title"], "icon": "/icon.svg", "theme": "auto",
