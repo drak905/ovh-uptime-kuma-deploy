@@ -10,7 +10,9 @@ Uptime Kuma runs in Docker next to a Tailscale sidecar container. The sidecar jo
 | `docker/ts-config/ts-serve.json` | Tailscale Serve: HTTPS 443 to `http://127.0.0.1:3001`. Funnel is off |
 | `scripts/deploy.py` | Deploy from the PC: `audit`, `stage`, `sidecar`, `up`, `drop-key`, `status` |
 | `scripts/backup_kuma.sh` | SQLite backup, run daily 03:15 by `/etc/cron.d/uptime-kuma-backup` |
-| `tests/` | Five pytest tiers (below) |
+| `scripts/monitors.py`, `seed_monitors.py`, `kuma_apply.py` | Monitor plan, PC-side seeding, VPS-side insert |
+| `scripts/kuma_push.sh`, `uptime-kuma-push.cron` | Host checks that feed Kuma push monitors, every minute |
+| `tests/` | Six pytest tiers (below) |
 
 Versions are pinned: `louislam/uptime-kuma:2.5.12-slim` and `tailscale/tailscale:v1.104.7`.
 
@@ -33,8 +35,21 @@ Versions are pinned: `louislam/uptime-kuma:2.5.12-slim` and `tailscale/tailscale
 | 3 | PC on the tailnet, no exit node | HTTPS with a valid certificate, `wss` first frame, public IP port 3001 closed. Skips otherwise |
 | 4 | VPS | Restart, force-recreate, database integrity, auth key removed |
 | 5 | VPS | Backup script and archive, cron entry, outbound and tailnet DNS probes from inside Kuma |
+| 6 | VPS (PC offline parts run alone) | Monitor plan, seed script on a stand-in database, backup, rows in `kuma.db`, status page `vps`, push cron, every monitor UP on the status page JSON |
 
 Run tier 3 with the PC exit node off. With an exit node on, a probe to the VPS public IP comes back in through `tailscale0` and proves nothing.
+
+## Monitors and status page
+
+After the owner creates the admin account, run `python scripts/seed_monitors.py` from the PC. It needs `VPS_TS_IP`, `VPS_TS_FQDN`, `KUMA_FQDN` and `KUMA_TS_IP` in `.env`. Kuma's API needs the owner's password and 2FA code, so the script edits `kuma.db` directly. It never touches the `user` table.
+
+1. Backs up `kuma.db` to `/opt/uptime-kuma/backups/kuma-pre-monitors-<stamp>.db` (mode 600).
+2. Stops only `uptime-kuma` (about a minute), runs `scripts/kuma_apply.py` on the VPS, starts it again. Insert only, matched by name: a monitor the owner made is kept.
+3. Writes `/etc/uptime-kuma-push.env` (mode 600, push tokens), installs `scripts/kuma_push.sh` and `/etc/cron.d/uptime-kuma-push`.
+
+The plan is in `scripts/monitors.py`: groups VPS, UniFi and Apps (12 monitors, 60 s interval, 3 retries) and the public status page `/status/vps`. Push monitors are fed by the host cron once a minute, and only when their check passes. No notifications are set up. Test a push script without sending: `sudo KUMA_PUSH_DRYRUN=1 /opt/uptime-kuma/scripts/kuma_push.sh`.
+
+Undo: `docker stop uptime-kuma`, copy the backup over `/opt/uptime-kuma/data/kuma.db` (delete `kuma.db-wal` and `kuma.db-shm`), `docker start uptime-kuma`, then `sudo rm /etc/cron.d/uptime-kuma-push /etc/uptime-kuma-push.env`.
 
 ## Operating notes
 
