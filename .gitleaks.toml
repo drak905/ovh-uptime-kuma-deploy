@@ -1,0 +1,44 @@
+title = "uptime-kuma deploy"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local, untracked files"
+paths = [
+  '''(^|/)\.env$''',
+  '''(^|/)\.venv/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)\.git/''',
+]
+
+[[rules]]
+id = "tailscale-authkey"
+description = "Tailscale auth, API, client or SCIM key"
+regex = '''tskey-(auth|api|client|scim)-[A-Za-z0-9-]{10,}'''
+keywords = ["tskey-"]
+
+[[rules]]
+id = "tailnet-hostname"
+description = "Real tailnet host name (use <tailnet>.ts.net or example.ts.net)"
+regex = '''\b[a-z0-9][a-z0-9-]*\.ts\.net\b'''
+keywords = [".ts.net"]
+[[rules.allowlists]]
+regexes = ['''\bexample\.ts\.net\b''']
+regexTarget = "match"
+
+[[rules]]
+id = "tailscale-cgnat-ip"
+description = "Tailscale IPv4 (100.64.0.0/10)"
+regex = '''\b100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}\b'''
+keywords = ["100."]
+[[rules.allowlists]]
+description = "Tailscale MagicDNS resolver, the same for everyone"
+regexes = ['''\b100\.100\.100\.100\b''']
+regexTarget = "match"
+
+[[rules]]
+id = "tailscale-ula-ip"
+description = "Tailscale IPv6 prefix"
+regex = '''fd7a:115c:a1e0:'''
+keywords = ["fd7a:"]

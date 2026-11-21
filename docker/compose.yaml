@@ -1,0 +1,70 @@
+name: uptime-kuma
+
+# Uptime Kuma v2 reachable only over Tailscale (sidecar mode).
+# No ports are published on the host. Kuma shares the sidecar network namespace.
+# Deploy with: docker compose -p uptime-kuma --env-file /opt/uptime-kuma/.env up -d
+# After any change to ts-sidecar, recreate BOTH services (a shared namespace goes stale):
+#   docker compose -p uptime-kuma --env-file /opt/uptime-kuma/.env up -d --force-recreate
+
+services:
+  ts-uptime-kuma:
+    image: tailscale/tailscale:v1.104.7
+    container_name: ts-uptime-kuma
+    hostname: ${TS_HOSTNAME:-uptime-kuma}
+    restart: unless-stopped
+    environment:
+      TS_HOSTNAME: ${TS_HOSTNAME:-uptime-kuma}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/ts-serve.json
+      TS_USERSPACE: "false"
+      TS_ACCEPT_DNS: "true"
+      TS_ENABLE_HEALTH_CHECK: "true"
+      TS_LOCAL_ADDR_PORT: 127.0.0.1:9002
+    volumes:
+      - /opt/uptime-kuma/ts-state:/var/lib/tailscale
+      - ./ts-config:/config:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9002/healthz >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:2.5.12-slim
+    container_name: uptime-kuma
+    restart: unless-stopped
+    network_mode: service:ts-uptime-kuma
+    depends_on:
+      ts-uptime-kuma:
+        condition: service_healthy
+    environment:
+      UPTIME_KUMA_HOST: 127.0.0.1
+      UPTIME_KUMA_PORT: "3001"
+      UPTIME_KUMA_DB_TYPE: sqlite
+    volumes:
+      - /opt/uptime-kuma/data:/app/data
+    mem_limit: 1g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "node", "extra/healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

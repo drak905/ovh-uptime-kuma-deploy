@@ -1,0 +1,3 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+15 3 * * * root /opt/uptime-kuma/scripts/backup_kuma.sh >> /var/log/uptime-kuma-backup.log 2>&1
